@@ -1,33 +1,32 @@
-// ─── Ejemplo de uso completo de TBox IoT ─────────────────────────────────────
-//
-// Hardware requerido:
-//   - micro:bit v1 o v2
-//   - Nezha Expansion Board
-//   - Módulo WiFi EF05036 (BL602) conectado al puerto J1
-// ─────────────────────────────────────────────────────────────────────────────
+// Ejemplo completo de uso - TBox IoT
+// Hardware: micro:bit + Nezha board + módulo EF05036 en J1
 
-// Al iniciar: configurar serial y conectar
-TBoxIoT.init(SerialPin.P8, SerialPin.P12)
+// ── 1. Inicializar ──────────────────────────────────────────
+TBoxIoT.init()
+TBoxIoT.setServer("http://192.168.1.100", 8080)
+
+// ── 2. Conectar WiFi y TBox ─────────────────────────────────
 TBoxIoT.connectWifi("MiRedWiFi", "mi_clave_123")
-TBoxIoT.connectTBox("192.168.1.100", "miToken123", 1)
+TBoxIoT.connectTBox("miToken123", 1)
 
-// Cuando la plataforma enciende el switch
+// ── 3. Control remoto desde la plataforma ───────────────────
 TBoxIoT.onSwitchOn(function () {
     basic.showIcon(IconNames.Heart)
 })
 
-// Cuando la plataforma apaga el switch
 TBoxIoT.onSwitchOff(function () {
     basic.clearScreen()
 })
 
-// Para siempre: enviar datos y verificar conexión
+// ── 4. Enviar datos cada 5 segundos ─────────────────────────
 basic.forever(function () {
-    if (TBoxIoT.isConnected()) {
-        TBoxIoT.sendFields(input.temperature(), input.lightLevel())
+    if (TBoxIoT.isTBoxConnected()) {
+        TBoxIoT.setData(input.temperature(), input.lightLevel())
+        TBoxIoT.uploadData()
         basic.showIcon(IconNames.SmallHeart)
     } else {
         basic.showIcon(IconNames.Sad)
+        TBoxIoT.connectTBox("miToken123", 1)
     }
     basic.pause(5000)
 })
