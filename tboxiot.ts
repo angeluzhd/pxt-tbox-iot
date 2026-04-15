@@ -1,11 +1,31 @@
 /**
  * TBox IoT - Extensión MakeCode para micro:bit
  * Módulo WiFi EF05036 (BL602/ESP8266) → servidor TBox IoT vía HTTP
- * Basado en el protocolo real AT de ELECFREAKS PlanetX IoT
+ * Compatible con: micro:bit v1 y v2 + Nezha Expansion Board
  */
 
 //% color="#00BCD4" weight=95 icon="\uf1eb" block="TBox IoT"
 namespace TBoxIoT {
+
+    // ─── Enumeraciones públicas ───────────────────────────────────────────────
+
+    export enum RJPort {
+        //% block="J1"
+        J1,
+        //% block="J2"
+        J2,
+        //% block="J3"
+        J3,
+        //% block="J4"
+        J4
+    }
+
+    export enum WifiState {
+        //% block="true"
+        Connected = 1,
+        //% block="false"
+        Disconnected = 0
+    }
 
     // ─── Estado interno ───────────────────────────────────────────────────────
     let _wifi_connected = false
@@ -18,17 +38,21 @@ namespace TBoxIoT {
     let _lastSendTime = 0
     let _switchStatus = false
     let _switchListening = false
-
-    // Buffer para recibir respuestas seriales
     let _strBuf = ""
 
-    type HandlerMap = { [key: string]: { type: number, handler?: (res: string) => void, msg?: string } }
-    const _handlers: HandlerMap = {}
+    // Sistema de handlers (igual al patrón oficial ELECFREAKS)
+    type HandlerEntry = {
+        type: number,          // 0 = async callback, 1 = sync wait
+        handler?: (res: string) => void,
+        msg?: string
+    }
+    const _handlers: { [key: string]: HandlerEntry } = {}
 
-    // ─── Serial listener interno ──────────────────────────────────────────────
-    function _serialHandler() {
+    // ─── Listener serial con buffer (patrón oficial) ──────────────────────────
+    function _serialHandler(): void {
         const str = _strBuf + serial.readString()
         let splits = str.split("\n")
+        // Si el último carácter NO es \n, el último fragmento está incompleto
         if (str.charCodeAt(str.length - 1) != 10) {
             _strBuf = splits.pop()
         } else {
@@ -40,7 +64,7 @@ namespace TBoxIoT {
                 if (res.includes(key)) {
                     if (_handlers[key].type == 0 && _handlers[key].handler) {
                         _handlers[key].handler(res)
-                    } else {
+                    } else if (_handlers[key].type == 1) {
                         _handlers[key].msg = res
                     }
                 }
@@ -49,9 +73,17 @@ namespace TBoxIoT {
     }
 
     // ─── Funciones AT internas ────────────────────────────────────────────────
-    function _sendAT(command: string, wait: number = 0) {
+    function _sendAT(command: string, wait: number = 0): void {
         serial.writeString(command + "\r\n")
-        basic.pause(wait)
+        if (wait > 0) basic.pause(wait)
+    }
+
+    function _registerHandler(key: string, handler: (res: string) => void): void {
+        _handlers[key] = { type: 0, handler }
+    }
+
+    function _removeHandler(key: string): void {
+        delete _handlers[key]
     }
 
     function _waitResponse(key: string, wait: number = 1000): string {
@@ -75,32 +107,52 @@ namespace TBoxIoT {
         return _waitResponse(key, wait)
     }
 
-    function _registerHandler(key: string, handler: (res: string) => void) {
-        _handlers[key] = { type: 0, handler }
+    function _resetModule(): void {
+        _sendRequest("AT+RESTORE", "ready", 2000)
+        _sendRequest("AT+RST", "ready", 2000)
+        if (_sendRequest("AT+CWMODE=1", "OK", 1000) == null) {
+            _sendRequest("AT+CWMODE=1", "OK", 1000)
+        }
     }
 
     function _buildUrl(path: string): string {
         return `AT+HTTPCLIENT=2,0,"${_host}:${_port}${path}",,,1`
     }
 
-    function _resetModule() {
-        _sendRequest("AT+RESTORE", "ready", 2000)
-        _sendRequest("AT+RST", "ready", 2000)
-        _sendRequest("AT+CWMODE=1", "OK", 1000)
-    }
-
     // ─── CONFIGURACIÓN ────────────────────────────────────────────────────────
 
     /**
-     * Inicializar módulo WiFi EF05036 en el puerto J1 del Nezha board
-     * Llama este bloque una sola vez al iniciar
+     * Inicializar módulo WiFi en el puerto del Nezha board
+     * @param port puerto RJ11 donde está conectado el módulo, eg: RJPort.J1
+     * @param baudrate velocidad de comunicación serial, eg: BaudRate.BaudRate115200
      */
-    //% block="Inicializar TBox IoT en puerto J1"
+    //% block="Inicializar TBox IoT puerto %port baudrate %baudrate"
+    //% port.defl=RJPort.J1
+    //% baudrate.defl=BaudRate.BaudRate115200
     //% weight=100
     //% group="1. Configuración"
-    export function init(): void {
-        // Puerto J1 del Nezha: TX=P8, RX=P1
-        serial.redirect(SerialPin.P8, SerialPin.P1, BaudRate.BaudRate115200)
+    export function init(port: RJPort, baudrate: BaudRate): void {
+        let pin_tx = SerialPin.P8
+        let pin_rx = SerialPin.P1
+        switch (port) {
+            case RJPort.J1:
+                pin_tx = SerialPin.P8
+                pin_rx = SerialPin.P1
+                break
+            case RJPort.J2:
+                pin_tx = SerialPin.P12
+                pin_rx = SerialPin.P2
+                break
+            case RJPort.J3:
+                pin_tx = SerialPin.P14
+                pin_rx = SerialPin.P13
+                break
+            case RJPort.J4:
+                pin_tx = SerialPin.P16
+                pin_rx = SerialPin.P15
+                break
+        }
+        serial.redirect(pin_tx, pin_rx, baudrate)
         serial.setTxBufferSize(128)
         serial.setRxBufferSize(128)
         serial.onDataReceived(serial.delimiters(Delimiters.NewLine), _serialHandler)
@@ -108,7 +160,7 @@ namespace TBoxIoT {
     }
 
     /**
-     * Configurar IP y puerto del servidor TBox IoT
+     * Configurar dirección del servidor TBox IoT
      * @param host IP o dominio del servidor, eg: "http://192.168.1.100"
      * @param port puerto del servidor, eg: 8080
      */
@@ -126,8 +178,8 @@ namespace TBoxIoT {
 
     /**
      * Conectar a la red WiFi
-     * @param ssid nombre de la red WiFi, eg: "MiRed"
-     * @param password contraseña, eg: "mi_clave"
+     * @param ssid nombre de la red WiFi, eg: "MiRedWiFi"
+     * @param password contraseña de la red, eg: "mi_clave"
      */
     //% block="Conectar WiFi red %ssid contraseña %password"
     //% ssid.defl="MiRedWiFi"
@@ -135,8 +187,8 @@ namespace TBoxIoT {
     //% weight=95
     //% group="2. Conexión"
     export function connectWifi(ssid: string, password: string): void {
-        _registerHandler("WIFI DISCONNECT", () => _wifi_connected = false)
-        _registerHandler("WIFI GOT IP", () => _wifi_connected = true)
+        _registerHandler("WIFI DISCONNECT", () => { _wifi_connected = false })
+        _registerHandler("WIFI GOT IP", () => { _wifi_connected = true })
         let retries = 3
         while (true) {
             _sendAT(`AT+CWJAP="${ssid}","${password}"`)
@@ -150,14 +202,26 @@ namespace TBoxIoT {
     }
 
     /**
-     * Conectar a la plataforma TBox IoT con Token y Topic
-     * @param token User Token de tu cuenta, eg: "ABC123xyz"
+     * Verificar estado de la conexión WiFi
+     * @param state estado esperado, eg: WifiState.Connected
+     */
+    //% block="WiFi conectado %state"
+    //% state.defl=WifiState.Connected
+    //% weight=90
+    //% group="2. Conexión"
+    export function wifiState(state: WifiState): boolean {
+        return _wifi_connected === (state === WifiState.Connected)
+    }
+
+    /**
+     * Conectar a la plataforma TBox IoT
+     * @param token User Token de la cuenta, eg: "miToken123"
      * @param topic número de dispositivo (1-10), eg: 1
      */
     //% block="Conectar TBox token %token topic %topic"
     //% token.defl="miToken123"
     //% topic.defl=1
-    //% weight=90
+    //% weight=85
     //% group="2. Conexión"
     export function connectTBox(token: string, topic: number): void {
         _token = token
@@ -170,9 +234,7 @@ namespace TBoxIoT {
             )
             if (ret != null) {
                 _iot_connected = true
-                if (ret.includes('switchOn')) {
-                    _switchStatus = true
-                }
+                _switchStatus = ret.includes("switchOn")
                 return
             }
         }
@@ -180,20 +242,10 @@ namespace TBoxIoT {
     }
 
     /**
-     * ¿Está conectado el WiFi?
-     */
-    //% block="WiFi conectado"
-    //% weight=85
-    //% group="2. Conexión"
-    export function isWifiConnected(): boolean {
-        return _wifi_connected
-    }
-
-    /**
-     * ¿Está conectado a TBox IoT?
+     * Verificar si TBox IoT está conectado
      */
     //% block="TBox conectado"
-    //% weight=84
+    //% weight=80
     //% group="2. Conexión"
     export function isTBoxConnected(): boolean {
         return _iot_connected
@@ -202,34 +254,34 @@ namespace TBoxIoT {
     // ─── ENVIAR DATOS ─────────────────────────────────────────────────────────
 
     /**
-     * Preparar datos para enviar (campos 1 y 2)
-     * @param d1 valor del campo 1, eg: 0
-     * @param d2 valor del campo 2, eg: 0
-     */
-    //% block="Preparar datos campo 1 = %d1 campo 2 = %d2"
-    //% weight=80
-    //% group="3. Enviar Datos"
-    export function setData(d1: number, d2: number = 0): void {
-        _sendMsg = _buildUrl(
-            `/iot/iotTopicData/addTopicData?userToken=${_token}&topicName=${_topic}&data1=${d1}&data2=${d2}`
-        )
-    }
-
-    /**
-     * Preparar datos para enviar (hasta 5 campos)
+     * Preparar datos para enviar (hasta 8 campos)
      * @param d1 campo 1, eg: 0
      * @param d2 campo 2, eg: 0
      * @param d3 campo 3, eg: 0
      * @param d4 campo 4, eg: 0
      * @param d5 campo 5, eg: 0
+     * @param d6 campo 6, eg: 0
+     * @param d7 campo 7, eg: 0
+     * @param d8 campo 8, eg: 0
      */
-    //% block="Preparar datos 1=%d1 2=%d2 3=%d3 4=%d4 5=%d5"
-    //% weight=78
+    //% block="Preparar datos|Campo 1 = %d1||Campo 2 = %d2|Campo 3 = %d3|Campo 4 = %d4|Campo 5 = %d5|Campo 6 = %d6|Campo 7 = %d7|Campo 8 = %d8"
+    //% expandableArgumentMode="enabled"
+    //% weight=75
     //% group="3. Enviar Datos"
-    export function setDataFull(d1: number, d2: number = 0, d3: number = 0, d4: number = 0, d5: number = 0): void {
+    export function setData(
+        d1: number,
+        d2: number = 0,
+        d3: number = 0,
+        d4: number = 0,
+        d5: number = 0,
+        d6: number = 0,
+        d7: number = 0,
+        d8: number = 0
+    ): void {
         _sendMsg = _buildUrl(
             `/iot/iotTopicData/addTopicData?userToken=${_token}&topicName=${_topic}`
-            + `&data1=${d1}&data2=${d2}&data3=${d3}&data4=${d4}&data5=${d5}`
+            + `&data1=${d1}&data2=${d2}&data3=${d3}&data4=${d4}`
+            + `&data5=${d5}&data6=${d6}&data7=${d7}&data8=${d8}`
         )
     }
 
@@ -237,11 +289,10 @@ namespace TBoxIoT {
      * Enviar los datos preparados a TBox IoT
      */
     //% block="Enviar datos a TBox"
-    //% weight=75
+    //% weight=70
     //% group="3. Enviar Datos"
     export function uploadData(): void {
         if (!_iot_connected) return
-        // Respetar mínimo 1 segundo entre envíos
         basic.pause(_lastSendTime + 1000 - input.runningTime())
         _sendAT(_sendMsg)
         _lastSendTime = input.runningTime()
@@ -250,10 +301,10 @@ namespace TBoxIoT {
     // ─── CONTROL REMOTO ───────────────────────────────────────────────────────
 
     /**
-     * Ejecutar código cuando la plataforma enciende el switch
+     * Ejecutar código cuando la plataforma encienda el switch
      */
     //% block="Cuando TBox encienda el switch"
-    //% weight=70
+    //% weight=65
     //% group="4. Control Remoto"
     export function onSwitchOn(handler: () => void): void {
         _registerHandler('{"code":200,"msg":null,"data":"switchOn"}', () => {
@@ -269,7 +320,7 @@ namespace TBoxIoT {
      * Ejecutar código cuando la plataforma apague el switch
      */
     //% block="Cuando TBox apague el switch"
-    //% weight=69
+    //% weight=64
     //% group="4. Control Remoto"
     export function onSwitchOff(handler: () => void): void {
         _registerHandler('{"code":200,"msg":null,"data":"switchOff"}', () => {
@@ -284,10 +335,11 @@ namespace TBoxIoT {
     function _startSwitchPolling(): void {
         if (_switchListening) return
         _switchListening = true
-        // Consultar estado del switch cada 1 segundo
         basic.forever(() => {
             if (_iot_connected) {
-                _sendAT(_buildUrl(`/iot/iotTopic/getTopicStatus/${_token}/${_topic}`))
+                _sendAT(_buildUrl(
+                    `/iot/iotTopic/getTopicStatus/${_token}/${_topic}`
+                ))
             }
             basic.pause(1000)
         })
