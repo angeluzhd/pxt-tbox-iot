@@ -1,0 +1,21 @@
+{
+    "name": "pxt-tbox-iot",
+    "version": "1.0.0",
+    "description": "Extension TBox IoT para conectar micro:bit con modulo WiFi EF05036 (BL602) a la plataforma TBox IoT",
+    "license": "MIT",
+    "dependencies": {
+        "core": "*"
+    },
+    "files": [
+        "tboxiot.ts",
+        "test.ts",
+        "README.md"
+    ],
+    "testFiles": [
+        "test.ts"
+    ],
+    "supportedTargets": [
+        "microbit"
+    ],
+    "preferredEditor": "blocksprj"
+}
